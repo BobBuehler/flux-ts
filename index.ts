@@ -5,15 +5,18 @@ interface Action {
     type: string;
 }
 
-// Dispatch one of these for asynchronous activities
 interface Actor {
     (dispatch: Dispatch, getState: GetState): void;
 }
 
-// Should return initial state when invoked with an undefined state.
-// Up to the application architect if they want to mutate the state.
-interface Store {
-    (state?: State, action?: Action): State;
+interface StateReducer<T extends State> {
+    (state: T, action: Action): T;
+}
+
+interface Store<T extends State> {
+    name: string;
+    reducer: StateReducer<T>;
+    initialState: T;
 }
 
 interface Listener {
@@ -28,31 +31,22 @@ interface Dispatch {
     (actionator: Action | Actor): void;
 }
 
-class LeanRedux {
+class FluxTs {
     private state: State;
-    private stores: {[key: string]: Store};
+    private reducers: {[key: string]: StateReducer<any>};
     private listeners: Listener[];
     
-    public constructor() {
+    public constructor(stores: Store<any>[]) {
         this.state = {};
-        this.stores = {};
+        this.reducers = {};
         this.listeners = [];
+        
+        stores.forEach(store => {
+            this.state[store.name] = store.initialState;
+            this.reducers[store.name] = store.reducer;
+        })
     }
-    
-    // If a store already exists with this name it will be
-    // overridden and its state will be lost.
-    addStore(name: string, store: Store) {
-        this.stores[name] = store;
-        this.state[name] = store();
-    }
-    
-    removeStore(name: string) {
-        delete this.stores[name];
-        delete this.state[name];
-    }
-    
-    // If this listener has already been added it will not be added
-    // again. This prevents repeat calls to the same listener.
+
     addListener(listener: Listener) {
         var index = this.listeners.indexOf(listener);
         if (index === -1) {
@@ -77,20 +71,36 @@ class LeanRedux {
             actor(this.dispatch, this.getState);
         } else {
             var action = <Action>actionator;
-            this._applyAction(action);
-            this._notifyListeners(action);
+            
+            this.state = Object.keys(this.reducers).reduce((next, storeName) => {
+                next[storeName] = this.reducers[storeName](this.state[storeName], action);
+                return next;
+            }, {});
+        
+            this.listeners.forEach(listener => {
+                listener(action, this.getState);
+            });
         }
     }
+}
+
     
-    private _applyAction(action: Action) {
-        Object.keys(this.stores).forEach(name => {
-            this.state[name] = this.stores[name](action);
-        })
+function bindActionCreators<T>(actionCreators: T, dispatch: Dispatch | FluxTs): T {
+    var d: Dispatch = <Dispatch>dispatch;
+    if ('dispatch' in dispatch) {
+        d = (<FluxTs>dispatch).dispatch;
     }
-    
-    private _notifyListeners(action: Action) {
-        this.listeners.forEach(listener => {
-            listener(action, this.getState);
-        })
-    }
+    return <T>Object.keys(actionCreators).reduce(function(bound, key) {
+        var value = actionCreators[key];
+        if (typeof key === "function") {
+            bound[key] = function() {
+                var action = value(arguments);
+                d(action);
+                return action;
+            }
+        } else {
+            bound[key] = value;
+        }
+        return bound;
+    }, {})
 }
